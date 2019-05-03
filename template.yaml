@@ -1,0 +1,139 @@
+Metadata: 
+  License: Apache-2.0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Lorem ipsum dolor sit amet'
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  SSHLocation:
+    Description: The IP address range that can be used to SSH to the EC2 instances
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+  AmiId:
+    Type: String
+    Default: 'ami-76144b0a'
+    ConstraintDescription: AMI ID to use. The default value is Red Hat Enterprise Linux 7.5 in ap-southeast-1 region.
+Resources:
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      BlockDeviceMappings:
+        - DeviceName: /dev/sdf
+          Ebs:
+            VolumeSize: 5
+        - DeviceName: /dev/sdg
+          Ebs:
+            VolumeSize: 6
+        - DeviceName: /dev/sdh
+          Ebs:
+            VolumeSize: 7
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+
+          # Install required utilities
+          yum -y install vim telnet wget git curl
+          yum -y install nvme-cli
+
+          /usr/bin/wget https://gist.githubusercontent.com/lbernail/d851e5b06eb32180a4b8ead2ce4f45db/raw/07772083fa1c2e567ed422eb401ac7783487d1c7/ebsnvme-id
+          chmod 755 ebsnvme-id
+          mv ebsnvme-id /sbin/
+
+          # Create the filesystem so we can mount it in fstab after udev takes effect when rebooted
+
+          mkfs.xfs /dev/nvme1n1
+          mkfs.xfs /dev/nvme2n1
+          mkfs.xfs /dev/nvme3n1
+
+          # Get the UUIDs of the new filesystems
+
+          export nvme1uuid=$(blkid | grep nvme1n1 | awk '{ print $2 }' | sed 's/"//g')
+          export nvme2uuid=$(blkid | grep nvme2n1 | awk '{ print $2 }' | sed 's/"//g')
+          export nvme3uuid=$(blkid | grep nvme3n1 | awk '{ print $2 }' | sed 's/"//g')
+
+          # Create the mountpoints
+
+          mkdir /mnt/disk1
+          mkdir /mnt/disk2
+          mkdir /mnt/disk3
+
+          # Put the UUIDs in fstab
+
+          export nvme1attachment=$(ebsnvme-id /dev/nvme1n1 -u | sed 's/ //g')
+          case "$nvme1attachment" in
+            "sdf")
+              echo "$nvme1uuid /mnt/disk1 xfs defaults 0 0" >> /etc/fstab
+              ;;
+            "sdg")
+              echo "$nvme1uuid /mnt/disk2 xfs defaults 0 0" >> /etc/fstab
+              ;;
+            "sdh")
+              echo "$nvme1uuid /mnt/disk3 xfs defaults 0 0" >> /etc/fstab
+              ;;
+          esac
+
+          export nvme2attachment=$(ebsnvme-id /dev/nvme2n1 -u | sed 's/ //g')
+          case "$nvme2attachment" in
+            "sdf")
+              echo "$nvme2uuid /mnt/disk1 xfs defaults 0 0" >> /etc/fstab
+              ;;
+            "sdg")
+              echo "$nvme2uuid /mnt/disk2 xfs defaults 0 0" >> /etc/fstab
+              ;;
+            "sdh")
+              echo "$nvme2uuid /mnt/disk3 xfs defaults 0 0" >> /etc/fstab
+              ;;
+          esac
+
+          export nvme3attachment=$(ebsnvme-id /dev/nvme3n1 -u | sed 's/ //g')
+          case "$nvme3attachment" in
+            "sdf")
+              echo "$nvme3uuid /mnt/disk1 xfs defaults 0 0" >> /etc/fstab
+              ;;
+            "sdg")
+              echo "$nvme3uuid /mnt/disk2 xfs defaults 0 0" >> /etc/fstab
+              ;;
+            "sdh")
+              echo "$nvme3uuid /mnt/disk3 xfs defaults 0 0" >> /etc/fstab
+              ;;
+          esac
+
+          # Write udev rule so there will be /dev/sd* symlinks to the correct NVMe devices order
+          echo 'KERNEL=="nvme[0-9]*n[0-9]*", ENV{DEVTYPE}=="disk", ATTRS{model}=="Amazon Elastic Block Store", PROGRAM="/sbin/ebsnvme-id -u /dev/%k", SYMLINK+="%c"' > /etc/udev/rules.d/70-ec2-nvme-devices.rules
+
+          # Restart so the udev rules in place and symlinks created
+          shutdown -r now
+          
+      InstanceType: t3.medium
+      SecurityGroups: [!Ref 'InstanceSecurityGroup']
+      KeyName: !Ref 'KeyName'
+      ImageId: !Ref 'AmiId'
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: !Ref 'SSHLocation'
+  IPAddress:
+    Type: AWS::EC2::EIP
+  IPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref 'EC2Instance'
+      EIP: !Ref 'IPAddress'
+Outputs:
+  InstanceId:
+    Description: InstanceId of the newly created EC2 instance
+    Value: !Ref 'EC2Instance'
+  InstanceIPAddress:
+    Description: IP address of the newly created EC2 instance
+    Value: !Ref 'IPAddress'
