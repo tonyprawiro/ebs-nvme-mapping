@@ -54,3 +54,6 @@ echo 'KERNEL=="nvme[0-9]*n[0-9]*", ENV{DEVTYPE}=="disk", ATTRS{model}=="Amazon E
 shutdown -r now
 ```
 
+## Cloudformation template
+
+The `template.yaml` file creates an EC2 instance with Elastic IP. The logic to automatically mount the correct device/partition into the correct mount point is provided in the EC2 instance's `UserData`.
